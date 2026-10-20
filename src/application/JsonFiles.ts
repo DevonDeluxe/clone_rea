@@ -45,13 +45,20 @@ export const readJsonFile = async (
   path: string,
   signal?: AbortSignal,
   resources?: ArtifactResourceScope,
+  snapshot = false,
 ): Promise<
   Result<unknown, EvidenceFileError | AnalysisResourceConstraintError>
 > =>
   readJsonFileInput(
     path,
     (selected) =>
-      readJsonInputFile(selected, "read_evidence_file", signal, resources),
+      readJsonInputFile(
+        selected,
+        "read_evidence_file",
+        signal,
+        resources,
+        snapshot,
+      ),
     signal,
   );
 
