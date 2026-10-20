@@ -307,6 +307,7 @@ const OPERATION = "inspect_native_dispatch_metadata";
 export const appleDispatchMetadataFailure = (
   cause: unknown,
   path: string,
+  operation: string = OPERATION,
 ): AnalysisError => {
   if (cause instanceof ArtifactReaderFailure && cause.cleanup !== undefined) {
     const physical =
@@ -315,10 +316,14 @@ export const appleDispatchMetadataFailure = (
         : undefined;
     const previous =
       physical?.outcome.kind === "failed"
-        ? appleDispatchMetadataFailure(artifactFilePrimaryFailure(cause), path)
+        ? appleDispatchMetadataFailure(
+            artifactFilePrimaryFailure(cause),
+            path,
+            operation,
+          )
         : physical?.completionCancellation === undefined
           ? undefined
-          : new AnalysisCancelledError(OPERATION, {
+          : new AnalysisCancelledError(operation, {
               cause: physical.completionCancellation.reason,
             });
     const failure = new ProviderCleanupError(
@@ -329,7 +334,7 @@ export const appleDispatchMetadataFailure = (
         previous_error:
           previous === undefined ? null : projectAnalysisError(previous),
       },
-      { operation: OPERATION, cause, cleanupPrimary: previous },
+      { operation, cause, cleanupPrimary: previous },
     );
     bindArtifactFileCleanup(cause, failure);
     return failure;
@@ -343,17 +348,17 @@ export const appleDispatchMetadataFailure = (
       { cause },
     );
   if (cause instanceof ArtifactReaderFailure && cause.reason === "cancelled")
-    return new AnalysisCancelledError(OPERATION, {
+    return new AnalysisCancelledError(operation, {
       cause: artifactFileCancellationCause(cause),
     });
   if (cause instanceof ArtifactReaderFailure && cause.reason === "unavailable")
     return new AnalysisCapabilityUnavailableError(
       IDENTITY.id,
-      OPERATION,
+      operation,
       cause.message,
       { cause },
     );
-  return new ProviderAdapterError(IDENTITY.id, OPERATION, {
+  return new ProviderAdapterError(IDENTITY.id, operation, {
     cause,
     diagnostics: {
       target_path: path,
