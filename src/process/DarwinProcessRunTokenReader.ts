@@ -18,6 +18,10 @@ import type {
 import { analysisErrorWithCleanupFailure } from "../domain/analysisErrorCleanup.js";
 import { safeParseJson } from "../domain/safeJson.js";
 import { boundedUtf8Text } from "./boundedUtf8Text.js";
+import {
+  awaitBootstrapCompilerProcessFamilyExit,
+  compilerFamilySettlementBudgetMs,
+} from "./CompilerProcessFamilySettlement.js";
 import { execFileOutput, execFileOutputFailure } from "./ExecFileOutput.js";
 import type {
   ProcessIdentityObservation,
@@ -462,6 +466,7 @@ export const createDarwinProcessRunTokenReader = (
   ): Promise<string> => {
     const signal = operation.controller.signal;
     let operationRoot: ProcessReaderRoot | undefined;
+    let compilerEnvironment: NodeJS.ProcessEnv | undefined;
     try {
       if (
         compiler.kind === "swiftc" &&
@@ -483,7 +488,7 @@ export const createDarwinProcessRunTokenReader = (
       // the root that cleanup removes.
       const compilerTemporary = join(operationRoot.path, "tmp");
       await mkdir(compilerTemporary);
-      const compilerEnvironment: NodeJS.ProcessEnv = {
+      compilerEnvironment = {
         ...process.env,
         TMPDIR: compilerTemporary,
       };
@@ -519,6 +524,40 @@ export const createDarwinProcessRunTokenReader = (
       operation.primaryFailure = { cause };
       if (operationRoot !== undefined) {
         try {
+          const commandFailure =
+            execFileOutputFailure(cause) ??
+            (cause instanceof DarwinProcessOwnershipInspectionError &&
+            cause.cause !== undefined
+              ? execFileOutputFailure(cause.cause)
+              : undefined);
+          if (
+            commandFailure?.outputReadersCutOff === true &&
+            commandFailure.leaderPid !== undefined &&
+            compilerEnvironment !== undefined
+          ) {
+            // Use a separate bounded cleanup signal, not the potentially-aborted
+            // operation signal. Cancellation must not skip the family check.
+            const cleanupDeadline = AbortSignal.timeout(
+              compilerFamilySettlementBudgetMs(compilerTimeoutMs),
+            );
+            const settled = await awaitBootstrapCompilerProcessFamilyExit(
+              commandFailure.leaderPid,
+              compilerTimeoutMs,
+              compilerEnvironment,
+              cleanupDeadline,
+            );
+            if (!settled) {
+              throw new ProviderCleanupError(
+                "process-ownership",
+                [operationRoot.path],
+                {
+                  reason:
+                    "The Darwin ownership helper compiler family could not be confirmed finished before removing its scratch root.",
+                },
+                { operation: "prepare_owned_process" },
+              );
+            }
+          }
           await cleanupRoot(operationRoot);
         } catch (cleanup: unknown) {
           if (!(cleanup instanceof ProviderCleanupError)) throw cleanup;
