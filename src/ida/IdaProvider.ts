@@ -240,12 +240,28 @@ export class IdaProvider implements AnalysisProviderCandidate {
         } lane. Select a supported Ghidra profile instead.`,
         diagnostics,
       };
+    if (target.kind === "database")
+      return target.databaseEngine !== "ida"
+        ? {
+            status: "unsupported",
+            code: "target_format_unsupported",
+            reason:
+              "IDA opens only IDA .idb/.i64 databases. Select the original input binary or an IDA database.",
+            diagnostics,
+          }
+        : {
+            status: "unknown",
+            code: null,
+            reason:
+              "IDA registration has not been resolved, so whether it can open an existing database is unknown.",
+            diagnostics,
+          };
     if (target.kind !== "executable")
       return {
         status: "unsupported",
         code: "target_kind_unsupported",
         reason:
-          "IDA MCP integration admits executable inputs, not analysis databases. Select the original input binary.",
+          "IDA MCP integration admits executable inputs and IDA databases. Select the original input binary.",
         diagnostics,
       };
     if (target.format === "raw-binary")
@@ -271,8 +287,34 @@ export class IdaProvider implements AnalysisProviderCandidate {
     options: AnalysisProviderInspectionOptions,
   ): Promise<ProviderTargetSupport> {
     const base = this.inspectTargetSupport(target);
-    if (base.status === "unsupported" || target.format !== "mach-o-universal")
-      return base;
+    if (base.status === "unsupported") return base;
+    if (target.kind === "database") {
+      const config = await this.#configuration(options);
+      // Only a Hex-Rays lease opens a private database copy; attached GUIs and
+      // database supervisors have no verified route for an existing database.
+      if (!config.ok)
+        return {
+          status: "unknown",
+          code: null,
+          reason: "IDA protocol could not be resolved from the registration.",
+          diagnostics: base.diagnostics,
+        };
+      return config.value.protocol === "hexrays"
+        ? {
+            status: "supported",
+            code: null,
+            reason: null,
+            diagnostics: base.diagnostics,
+          }
+        : {
+            status: "unsupported",
+            code: "target_kind_unsupported",
+            reason:
+              'Opening an existing IDA database requires the "hexrays" headless registration. Select the original input binary with this registration.',
+            diagnostics: base.diagnostics,
+          };
+    }
+    if (target.format !== "mach-o-universal") return base;
     // Attached identity is the recorded whole-input digest, which every slice
     // of a universal file shares, so it cannot prove the GUI loaded the slice
     // admission selected. Headless mode thins that slice into its own input.
@@ -318,9 +360,11 @@ export class IdaProvider implements AnalysisProviderCandidate {
       compatibility_profile:
         config.value.protocol === "native"
           ? "native-ida-mcp"
-          : config.value.mode === "attached"
-            ? "legacy-1.4"
-            : "database-supervisor",
+          : config.value.protocol === "hexrays"
+            ? "hexrays-ida-mcp"
+            : config.value.mode === "attached"
+              ? "legacy-1.4"
+              : "database-supervisor",
       database_revision: null,
       cache_policy: "live",
       registration_digest: createHash("sha256")
